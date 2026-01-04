@@ -1,0 +1,112 @@
+import asyncio
+import os
+from aiohttp import web
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Column, Integer, BigInteger, String, select
+
+# ===== ENV =====
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL").replace("postgresql://", "postgresql+asyncpg://")
+
+# ===== WEB SERVER (for Render) =====
+async def index(request):
+    return web.Response(text="RPG Bot is running")
+
+async def start_web():
+    app = web.Application()
+    app.router.add_get("/", index)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 10000)))
+    await site.start()
+
+# ===== DATABASE =====
+Base = declarative_base()
+engine = create_async_engine(DATABASE_URL, echo=False)
+Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    tg_id = Column(BigInteger, unique=True)
+    nickname = Column(String)
+    char_class = Column(String)
+
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+# ===== BOT =====
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
+
+# ===== FSM =====
+class Register(StatesGroup):
+    nickname = State()
+    char_class = State()
+
+# ===== Keyboards =====
+def class_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🧙 Mage", callback_data="class_mage")
+    kb.button(text="🏹 Archer", callback_data="class_archer")
+    kb.button(text="⚔ Warrior", callback_data="class_warrior")
+    kb.adjust(1)
+    return kb.as_markup()
+
+# ===== Handlers =====
+
+@dp.message(Command("start"))
+async def start(msg: types.Message, state: FSMContext):
+    async with Session() as db:
+        q = await db.execute(select(User).where(User.tg_id == msg.from_user.id))
+        if q.scalar():
+            await msg.answer("Ты уже зарегистрирован ✅")
+            return
+
+    await msg.answer_photo(
+        "https://i.postimg.cc/8Cw9nRQG/Picsart-26-01-03-14-13-18-780.jpg",
+        caption="Введи ник своего героя:"
+    )
+    await state.set_state(Register.nickname)
+
+@dp.message(Register.nickname)
+async def set_nick(msg: types.Message, state: FSMContext):
+    await state.update_data(nickname=msg.text)
+    await msg.answer("Выбери класс:", reply_markup=class_kb())
+    await state.set_state(Register.char_class)
+
+@dp.callback_query(lambda c: c.data.startswith("class_"))
+async def set_class(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    nickname = data["nickname"]
+    char_class = call.data.replace("class_", "")
+
+    async with Session() as db:
+        user = User(
+            tg_id=call.from_user.id,
+            nickname=nickname,
+            char_class=char_class
+        )
+        db.add(user)
+        await db.commit()
+
+    await call.message.answer(f"Герой создан!\n\nНик: {nickname}\nКласс: {char_class}")
+    await state.clear()
+
+# ===== START =====
+async def main():
+    await init_db()
+    await start_web()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
