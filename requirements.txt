@@ -1,3 +1,5 @@
-flask==3.0.0
-python-telegram-bot==21.0
-requests==2.31.0
+aiogram==3.4.1
+aiohttp
+sqlalchemy
+asyncpg
+python-dotenv
