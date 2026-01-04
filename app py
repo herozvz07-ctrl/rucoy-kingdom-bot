@@ -29,7 +29,10 @@ async def start_web():
 
 # ===== DATABASE =====
 Base = declarative_base()
-engine = create_async_engine(DATABASE_URL, echo=False)
+engine = create_async_engine(
+    DATABASE_URL.replace("postgresql://", "postgresql+psycopg://"),
+    echo=True
+)
 Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 class User(Base):
